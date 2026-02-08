@@ -7,14 +7,13 @@ from datetime import datetime
 from pytz import timezone
 from time import sleep, time
 from configobj import ConfigObj
-from pyowm import OWM
 from pymodbus.client.sync import ModbusSerialClient as ModbusClient
 
 def load_config(path="pvoutput.txt"):
     """Read settings from config file. Exits with a clear message on error."""
     required_keys = [
-        'SYSTEMID', 'APIKEY', 'OWMKEY', 'Longitude', 'Latitude',
-        'TimeZone', 'INVERTERPORT', 'MQTTUSER', 'MQTTPASS',
+        'SYSTEMID', 'APIKEY', 'TimeZone', 'INVERTERPORT',
+        'MQTTUSER', 'MQTTPASS',
         'MQTTBROKER', 'MQTTPORT', 'MQTTTOPIC',
     ]
     try:
@@ -34,9 +33,6 @@ def load_config(path="pvoutput.txt"):
 config = load_config()
 SYSTEMID = config['SYSTEMID']
 APIKEY = config['APIKEY']
-OWMKey = config['OWMKEY']
-OWMLon = float(config['Longitude'])
-OWMLat = float(config['Latitude'])
 LocalTZ = timezone(config['TimeZone'])
 
 INVERTERPORT = config['INVERTERPORT']
@@ -164,27 +160,6 @@ class Inverter(object):
         return False
 
 
-class Weather(object):
-
-    def __init__(self, API, lat, lon):
-        self._API = API
-        self._lat = float(lat)
-        self._lon = float(lon)
-        self._owm = OWM(self._API)
-
-        self.temperature = 0.0
-        self.cloud_pct = 0
-        self.cmo_str = ''
-
-    def get(self):
-        obs = self._owm.weather_at_coords(self._lat, self._lon)
-        w = obs.get_weather()
-        status = w.get_detailed_status()
-        self.temperature = w.get_temperature(unit='celsius')['temp']
-        self.cloud_pct = w.get_clouds()
-        self.cmo_str = ('%s with cloud coverage of %s percent' % (status, self.cloud_pct))
-
-
 class PVOutputAPI(object):
 
     _BASE_URL = "https://pvoutput.org/service/r2/"
@@ -294,20 +269,12 @@ def main_loop():
     inv = Inverter(0x1, INVERTERPORT)
     inv.connect()
     inv.version()
-    if OWMKey:
-        owm = Weather(OWMKey, OWMLat, OWMLon)
-        owm.fresh = False
-    else:
-        owm = False
 
     pvo = PVOutputAPI(APIKEY, SYSTEMID)
 
     # start and stop monitoring (hour of the day)
     shStart = 5
     shStop = 21
-
-    WEATHER_INTERVAL = 600  # fetch weather every 10 minutes
-    last_weather_fetch = 0
 
     PVOUTPUT_INTERVAL = 300  # upload to PVOutput every 5 minutes
     last_pvoutput_upload = 0
@@ -316,29 +283,16 @@ def main_loop():
     while True:
         # print(inv.status, inv.firmware, inv.control_fw, inv.model_no, inv.pv_power, inv.pv_volts, inv.ac_volts, inv.wh_today, inv.wh_total)
         if shStart <= localnow().hour < shStop:
-            # get fresh temperature from OWM (throttled)
-            if owm and (time() - last_weather_fetch >= WEATHER_INTERVAL):
-                try:
-                    owm.get()
-                    owm.fresh = True
-                except Exception as e:
-                    print('Error getting weather: {}'.format(e))
-                    owm.fresh = False
-                last_weather_fetch = time()
-
-            # get readings from inverter, if success send  to pvoutput
+            # get readings from inverter, if success send to pvoutput
             inv.read_inputs()
             if inv.status != -1:
-
-                # temperature report only if available
-                temp = owm.temperature if owm and owm.fresh else None
 
                 # Upload to PVOutput every 5 minutes
                 if time() - last_pvoutput_upload >= PVOUTPUT_INTERVAL:
                     pvo.send_status(date=inv.date, energy_gen=inv.wh_today,
                                     power_gen=inv.ac_power, vdc=inv.pv_volts,
-                                    vac=inv.ac_volts, temp=temp,
-                                    temp_inv=inv.temp, energy_life=inv.wh_total,
+                                    vac=inv.ac_volts, temp_inv=inv.temp,
+                                    energy_life=inv.wh_total,
                                     power_vdc=inv.pv_power)
                     last_pvoutput_upload = time()
                     print("PVOutput updated successfully.")
@@ -351,7 +305,7 @@ def main_loop():
                     { 'topic': f"{MQTTTOPIC}/ac_volts", 'payload': str(inv.ac_volts) },
                     { 'topic': f"{MQTTTOPIC}/wh_today", 'payload': str(inv.wh_today) },
                     { 'topic': f"{MQTTTOPIC}/wh_total", 'payload': str(inv.wh_total) },
-                    { 'topic': f"{MQTTTOPIC}/temp", 'payload': str(temp) if temp is not None else '' },
+                    { 'topic': f"{MQTTTOPIC}/temp", 'payload': str(inv.temp) },
                     { 'topic': f"{MQTTTOPIC}/serial_no", 'payload': inv.serial_no },
                     { 'topic': f"{MQTTTOPIC}/model_no", 'payload': inv.model_no }
                 ]
