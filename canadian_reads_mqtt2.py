@@ -10,8 +10,28 @@ from configobj import ConfigObj
 from pyowm import OWM
 from pymodbus.client.sync import ModbusSerialClient as ModbusClient
 
-# read settings from config file
-config = ConfigObj("pvoutput.txt")
+def load_config(path="pvoutput.txt"):
+    """Read settings from config file. Exits with a clear message on error."""
+    required_keys = [
+        'SYSTEMID', 'APIKEY', 'OWMKEY', 'Longitude', 'Latitude',
+        'TimeZone', 'INVERTERPORT', 'MQTTUSER', 'MQTTPASS',
+        'MQTTBROKER', 'MQTTPORT', 'MQTTTOPIC',
+    ]
+    try:
+        config = ConfigObj(path, file_error=True)
+    except IOError as e:
+        print("Error: Could not read config file '{}': {}".format(path, e))
+        sys.exit(1)
+
+    missing = [k for k in required_keys if k not in config]
+    if missing:
+        print("Error: Missing config keys: {}".format(', '.join(missing)))
+        sys.exit(1)
+
+    return config
+
+
+config = load_config()
 SYSTEMID = config['SYSTEMID']
 APIKEY = config['APIKEY']
 OWMKey = config['OWMKEY']
@@ -21,7 +41,7 @@ LocalTZ = timezone(config['TimeZone'])
 
 INVERTERPORT = config['INVERTERPORT']
 
-# Define the broker details
+# MQTT broker details
 MQTTUSER = config['MQTTUSER']
 MQTTPASS = config['MQTTPASS']
 MQTTBROKER = config['MQTTBROKER']
@@ -59,94 +79,89 @@ class Inverter(object):
         self.dtc = -1
         self.cmo_str = ''
 
+    def connect(self):
+        """Connect to the inverter. Returns True if successful."""
+        return self._inv.connect()
+
+    def close(self):
+        """Close the connection to the inverter."""
+        self._inv.close()
+
     def read_inputs(self):
         """Try read input properties from inverter, return true if succeed"""
-        ret = False
-
-        if self._inv.connect():
-            # by default read first 45 registers (from 0 to 44)
-            # they contain all basic information needed to report
-            rr = self._inv.read_input_registers(0, 45, unit=self._unit)
-            if not rr.isError():
-                ret = True
-                self.date = localnow()
-
-                self.status = rr.registers[0]
-                if self.status != -1:
-                    self.cmo_str = 'Status: '+str(self.status)
-                # my setup will never use high nibble but I will code it anyway
-                self.pv_power = float((rr.registers[1] << 16)+rr.registers[2])/10
-                self.pv_volts = float(rr.registers[3])/10
-                self.ac_power = float((rr.registers[11] << 16)+rr.registers[12])/10
-                self.ac_volts = float(rr.registers[14])/10
-                self.wh_today = float((rr.registers[26] << 16)+rr.registers[27])*100
-                self.wh_total = float((rr.registers[28] << 16)+rr.registers[29])*100
-                self.temp = float(rr.registers[32])/10
-            else:
-                self.status = -1
-                ret = False
-
-            self._inv.close()
-        else:
+        if not self._inv.connect():
             print('Error connecting to port')
-            ret = False
+            return False
 
-        return ret
+        # by default read first 45 registers (from 0 to 44)
+        # they contain all basic information needed to report
+        rr = self._inv.read_input_registers(0, 45, unit=self._unit)
+        if not rr.isError() and len(rr.registers) >= 45:
+            self.date = localnow()
+
+            self.status = rr.registers[0]
+            if self.status != -1:
+                self.cmo_str = 'Status: '+str(self.status)
+            # my setup will never use high nibble but I will code it anyway
+            self.pv_power = float((rr.registers[1] << 16)+rr.registers[2])/10
+            self.pv_volts = float(rr.registers[3])/10
+            self.ac_power = float((rr.registers[11] << 16)+rr.registers[12])/10
+            self.ac_volts = float(rr.registers[14])/10
+            self.wh_today = float((rr.registers[26] << 16)+rr.registers[27])*100
+            self.wh_total = float((rr.registers[28] << 16)+rr.registers[29])*100
+            self.temp = float(rr.registers[32])/10
+            return True
+
+        self.status = -1
+        self._inv.close()  # close on error to reset serial state
+        return False
+
+    @staticmethod
+    def _decode_registers(registers, start, count):
+        """Decode a sequence of 16-bit registers into a string (2 chars per register)."""
+        return ''.join(
+            chr(registers[i] >> 8) + chr(registers[i] & 0xFF)
+            for i in range(start, start + count)
+        )
 
     def version(self):
         """Read firmware version"""
-        ret = False
-
-        if self._inv.connect():
-            # by default read first 45 holding registers (from 0 to 44)
-            # they contain more than needed data
-            rr = self._inv.read_holding_registers(0, 45, unit=self._unit)
-            if not rr.isError():
-                ret = True
-                # returns G.1.8 on my unit
-                self.firmware = \
-                    str(chr(rr.registers[9] >> 8) + chr(rr.registers[9] & 0x000000FF) +
-                        chr(rr.registers[10] >> 8) + chr(rr.registers[10] & 0x000000FF) +
-                        chr(rr.registers[11] >> 8) + chr(rr.registers[11] & 0x000000FF))
-
-                # does not return any interesting thing on my model
-                self.control_fw = \
-                    str(chr(rr.registers[12] >> 8) + chr(rr.registers[12] & 0x000000FF) +
-                        chr(rr.registers[13] >> 8) + chr(rr.registers[13] & 0x000000FF) +
-                        chr(rr.registers[14] >> 8) + chr(rr.registers[14] & 0x000000FF))
-
-                # does match the label in the unit
-                self.serial_no = \
-                    str(chr(rr.registers[23] >> 8) + chr(rr.registers[23] & 0x000000FF) +
-                        chr(rr.registers[24] >> 8) + chr(rr.registers[24] & 0x000000FF) +
-                        chr(rr.registers[25] >> 8) + chr(rr.registers[25] & 0x000000FF) +
-                        chr(rr.registers[26] >> 8) + chr(rr.registers[26] & 0x000000FF) +
-                        chr(rr.registers[27] >> 8) + chr(rr.registers[27] & 0x000000FF))
-
-                # as per Growatt protocol
-                mo = (rr.registers[28] << 16) + rr.registers[29]
-                self.model_no = (
-                    'T' + str((mo & 0XF00000) >> 20) + ' Q' + str((mo & 0X0F0000) >> 16) +
-                    ' P' + str((mo & 0X00F000) >> 12) + ' U' + str((mo & 0X000F00) >> 8) +
-                    ' M' + str((mo & 0X0000F0) >> 4) + ' S' + str((mo & 0X00000F))
-                )
-
-                # 134 for my unit meaning single phase/single tracker inverter
-                self.dtc = rr.registers[43]
-            else:
-                self.firmware = ''
-                self.control_fw = ''
-                self.model_no = ''
-                self.serial_no = ''
-                self.dtc = -1
-                ret = False
-
-            self._inv.close()
-        else:
+        if not self._inv.connect():
             print('Error connecting to port')
-            ret = False
+            return False
 
-        return ret
+        # by default read first 45 holding registers (from 0 to 44)
+        # they contain more than needed data
+        rr = self._inv.read_holding_registers(0, 45, unit=self._unit)
+        if not rr.isError() and len(rr.registers) >= 45:
+            # returns G.1.8 on my unit
+            self.firmware = self._decode_registers(rr.registers, 9, 3)
+
+            # does not return any interesting thing on my model
+            self.control_fw = self._decode_registers(rr.registers, 12, 3)
+
+            # does match the label in the unit
+            self.serial_no = self._decode_registers(rr.registers, 23, 5)
+
+            # as per Growatt protocol
+            mo = (rr.registers[28] << 16) + rr.registers[29]
+            self.model_no = (
+                'T' + str((mo & 0XF00000) >> 20) + ' Q' + str((mo & 0X0F0000) >> 16) +
+                ' P' + str((mo & 0X00F000) >> 12) + ' U' + str((mo & 0X000F00) >> 8) +
+                ' M' + str((mo & 0X0000F0) >> 4) + ' S' + str((mo & 0X00000F))
+            )
+
+            # 134 for my unit meaning single phase/single tracker inverter
+            self.dtc = rr.registers[43]
+            return True
+
+        self.firmware = ''
+        self.control_fw = ''
+        self.model_no = ''
+        self.serial_no = ''
+        self.dtc = -1
+        self._inv.close()  # close on error to reset serial state
+        return False
 
 
 class Weather(object):
@@ -277,6 +292,7 @@ class PVOutputAPI(object):
 def main_loop():
     # init
     inv = Inverter(0x1, INVERTERPORT)
+    inv.connect()
     inv.version()
     if OWMKey:
         owm = Weather(OWMKey, OWMLat, OWMLon)
@@ -290,40 +306,41 @@ def main_loop():
     shStart = 5
     shStop = 21
 
+    WEATHER_INTERVAL = 600  # fetch weather every 10 minutes
+    last_weather_fetch = 0
+
+    PVOUTPUT_INTERVAL = 300  # upload to PVOutput every 5 minutes
+    last_pvoutput_upload = 0
 
     # Loop until end of universe
     while True:
         # print(inv.status, inv.firmware, inv.control_fw, inv.model_no, inv.pv_power, inv.pv_volts, inv.ac_volts, inv.wh_today, inv.wh_total)
         if shStart <= localnow().hour < shStop:
-            # get fresh temperature from OWM
-            if owm:
+            # get fresh temperature from OWM (throttled)
+            if owm and (time() - last_weather_fetch >= WEATHER_INTERVAL):
                 try:
                     owm.get()
                     owm.fresh = True
                 except Exception as e:
                     print('Error getting weather: {}'.format(e))
                     owm.fresh = False
+                last_weather_fetch = time()
 
             # get readings from inverter, if success send  to pvoutput
             inv.read_inputs()
             if inv.status != -1:
 
-                # Get the current time
-                current_time = time()
-
-                # pvoutput(inv, owm)
                 # temperature report only if available
                 temp = owm.temperature if owm and owm.fresh else None
 
-
-                # Check if more than five minutes have elapsed since the last PVOutput update
-                if datetime.now().minute % 5 == 0:
-
+                # Upload to PVOutput every 5 minutes
+                if time() - last_pvoutput_upload >= PVOUTPUT_INTERVAL:
                     pvo.send_status(date=inv.date, energy_gen=inv.wh_today,
                                     power_gen=inv.ac_power, vdc=inv.pv_volts,
                                     vac=inv.ac_volts, temp=temp,
                                     temp_inv=inv.temp, energy_life=inv.wh_total,
                                     power_vdc=inv.pv_power)
+                    last_pvoutput_upload = time()
                     print("PVOutput updated successfully.")
 
                 msgs = [
