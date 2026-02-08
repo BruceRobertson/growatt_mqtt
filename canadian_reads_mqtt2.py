@@ -172,6 +172,8 @@ class Weather(object):
 
 class PVOutputAPI(object):
 
+    _BASE_URL = "https://pvoutput.org/service/r2/"
+
     def __init__(self, API, system_id=None):
         self._API = API
         self._systemID = system_id
@@ -181,13 +183,13 @@ class PVOutputAPI(object):
         """Add live output data. Data should contain the parameters as described
         here: http://pvoutput.org/help.html#api-addstatus ."""
         sys_id = system_id if system_id is not None else self._systemID
-        self.__call("https://pvoutput.org/service/r2/addstatus.jsp", payload, sys_id)
+        self.__call(self._BASE_URL + "addstatus.jsp", payload, sys_id)
 
     def add_output(self, payload, system_id=None):
         """Add end of day output information. Data should be a dictionary with
         parameters as described here: http://pvoutput.org/help.html#api-addoutput ."""
         sys_id = system_id if system_id is not None else self._systemID
-        self.__call("http://pvoutput.org/service/r2/addoutput.jsp", payload, sys_id)
+        self.__call(self._BASE_URL + "addoutput.jsp", payload, sys_id)
 
     def __call(self, url, payload, system_id=None):
         headers = {
@@ -197,7 +199,7 @@ class PVOutputAPI(object):
         }
 
         # Make three attempts
-        for i in range(3):
+        for _ in range(3):
             try:
                 r = requests.post(url, headers=headers, data=payload, timeout=10)
                 reset = round(float(r.headers['X-Rate-Limit-Reset']) - time())
@@ -223,7 +225,7 @@ class PVOutputAPI(object):
             sleep(5)
         else:
             print(localnow().strftime('%Y-%m-%d %H:%M'),
-                  "Failed to call PVOutput API after {} attempts.".format(i))
+                  "Failed to call PVOutput API after 3 attempts.")
 
     def send_status(self, date, energy_gen=None, power_gen=None, energy_imp=None,
                     power_imp=None, temp=None, vdc=None, cumulative=False, vac=None,
@@ -325,17 +327,16 @@ def main_loop():
                     print("PVOutput updated successfully.")
 
                 msgs = [
-                    { 'topic': f"{MQTTTOPIC}/status", 'payload': inv.status },
-                    { 'topic': f"{MQTTTOPIC}/pv_power", 'payload': inv.pv_power },
-                    { 'topic': f"{MQTTTOPIC}/pv_volts", 'payload': inv.pv_volts },
-                    { 'topic': f"{MQTTTOPIC}/ac_power", 'payload': inv.ac_power },
-                    { 'topic': f"{MQTTTOPIC}/ac_volts", 'payload': inv.ac_volts },
-                    { 'topic': f"{MQTTTOPIC}/wh_today", 'payload': inv.wh_today },
-                    { 'topic': f"{MQTTTOPIC}/wh_total", 'payload': inv.wh_total },
-                    { 'topic': f"{MQTTTOPIC}/temp", 'payload': temp },
+                    { 'topic': f"{MQTTTOPIC}/status", 'payload': str(inv.status) },
+                    { 'topic': f"{MQTTTOPIC}/pv_power", 'payload': str(inv.pv_power) },
+                    { 'topic': f"{MQTTTOPIC}/pv_volts", 'payload': str(inv.pv_volts) },
+                    { 'topic': f"{MQTTTOPIC}/ac_power", 'payload': str(inv.ac_power) },
+                    { 'topic': f"{MQTTTOPIC}/ac_volts", 'payload': str(inv.ac_volts) },
+                    { 'topic': f"{MQTTTOPIC}/wh_today", 'payload': str(inv.wh_today) },
+                    { 'topic': f"{MQTTTOPIC}/wh_total", 'payload': str(inv.wh_total) },
+                    { 'topic': f"{MQTTTOPIC}/temp", 'payload': str(temp) if temp is not None else '' },
                     { 'topic': f"{MQTTTOPIC}/serial_no", 'payload': inv.serial_no },
                     { 'topic': f"{MQTTTOPIC}/model_no", 'payload': inv.model_no }
-
                 ]
 
                 try:
@@ -361,6 +362,8 @@ def main_loop():
             elif shStart > hour >= 0:
                 # after midnight
                 snooze = ((shStart - hour) * 60) - minute
+            else:
+                snooze = 1  # fallback: recheck in 1 minute
             print(localnow().strftime('%Y-%m-%d %H:%M') + ' - Next shift starts in ' + \
                 str(snooze) + ' minutes')
             sys.stdout.flush()
