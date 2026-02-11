@@ -276,9 +276,6 @@ def main_loop():
     shStart = 5
     shStop = 21
 
-    PVOUTPUT_INTERVAL = 300  # upload to PVOutput every 5 minutes
-    last_pvoutput_upload = 0
-
     # Loop until end of universe
     while True:
         # print(inv.status, inv.firmware, inv.control_fw, inv.model_no, inv.pv_power, inv.pv_volts, inv.ac_volts, inv.wh_today, inv.wh_total)
@@ -287,14 +284,13 @@ def main_loop():
             inv.read_inputs()
             if inv.status != -1:
 
-                # Upload to PVOutput every 5 minutes
-                if time() - last_pvoutput_upload >= PVOUTPUT_INTERVAL:
+                # Upload to PVOutput on 5-minute clock boundaries
+                if localnow().minute % 5 == 0:
                     pvo.send_status(date=inv.date, energy_gen=inv.wh_today,
                                     power_gen=inv.ac_power, vdc=inv.pv_volts,
                                     vac=inv.ac_volts, temp_inv=inv.temp,
                                     energy_life=inv.wh_total,
                                     power_vdc=inv.pv_power)
-                    last_pvoutput_upload = time()
                     print("PVOutput updated successfully.")
 
                 msgs = [
