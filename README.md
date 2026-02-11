@@ -35,6 +35,11 @@ Copy `pvoutput.txt.rename` to `pvoutput.txt` and fill in your details:
 | `MQTTBROKER` | MQTT broker hostname |
 | `MQTTPORT` | MQTT broker port (e.g. `1883`) |
 | `MQTTTOPIC` | MQTT base topic for published messages |
+| `LOGLEVEL` | *(Optional)* Log verbosity: `DEBUG`, `INFO`, `WARNING` (default), `ERROR`, `CRITICAL` |
+
+## Logging
+
+Logs are written to both the console and `canadianSolar.log` (daily rotation, 7 days retained). The default level is `WARNING`, which logs errors and warnings only. Set `LOGLEVEL=INFO` in `pvoutput.txt` to also see successful upload confirmations and scheduling messages.
 
 ## Usage
 

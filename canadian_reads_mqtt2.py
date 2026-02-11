@@ -1,13 +1,26 @@
 # -*- coding: utf-8 -*-
 import sys
+import logging
 import requests
 import paho.mqtt.publish as publish
 
 from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 from pytz import timezone
 from time import sleep, time
 from configobj import ConfigObj
 from pymodbus.client.sync import ModbusSerialClient as ModbusClient
+
+# Set up logging (console + daily rotating file)
+logger = logging.getLogger('pvoutput')
+logger.setLevel(logging.WARNING)
+_fmt = logging.Formatter('%(asctime)s %(levelname)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+_fh = TimedRotatingFileHandler('canadianSolar.log', when='midnight', backupCount=7)
+_fh.setFormatter(_fmt)
+_ch = logging.StreamHandler(sys.stdout)
+_ch.setFormatter(_fmt)
+logger.addHandler(_fh)
+logger.addHandler(_ch)
 
 def load_config(path="pvoutput.txt"):
     """Read settings from config file. Exits with a clear message on error."""
@@ -19,18 +32,27 @@ def load_config(path="pvoutput.txt"):
     try:
         config = ConfigObj(path, file_error=True)
     except IOError as e:
-        print("Error: Could not read config file '{}': {}".format(path, e))
+        logger.error("Could not read config file '%s': %s", path, e)
         sys.exit(1)
 
     missing = [k for k in required_keys if k not in config]
     if missing:
-        print("Error: Missing config keys: {}".format(', '.join(missing)))
+        logger.error("Missing config keys: %s", ', '.join(missing))
         sys.exit(1)
 
     return config
 
 
 config = load_config()
+
+# Override log level from config (optional, default WARNING)
+if 'LOGLEVEL' in config:
+    _level = getattr(logging, config['LOGLEVEL'].upper(), None)
+    if _level is not None:
+        logger.setLevel(_level)
+    else:
+        logger.warning("Invalid LOGLEVEL '%s' in config, using WARNING", config['LOGLEVEL'])
+
 SYSTEMID = config['SYSTEMID']
 APIKEY = config['APIKEY']
 LocalTZ = timezone(config['TimeZone'])
@@ -86,7 +108,7 @@ class Inverter(object):
     def read_inputs(self):
         """Try read input properties from inverter, return true if succeed"""
         if not self._inv.connect():
-            print('Error connecting to port')
+            logger.error('Modbus: failed to connect to serial port %s', self._inv.port)
             return False
 
         # by default read first 45 registers (from 0 to 44)
@@ -108,6 +130,8 @@ class Inverter(object):
             self.temp = float(rr.registers[32])/10
             return True
 
+        logger.warning('Modbus: input register read error (got %d registers, expected 45)',
+                       len(rr.registers) if hasattr(rr, 'registers') else 0)
         self.status = -1
         self._inv.close()  # close on error to reset serial state
         return False
@@ -123,7 +147,7 @@ class Inverter(object):
     def version(self):
         """Read firmware version"""
         if not self._inv.connect():
-            print('Error connecting to port')
+            logger.error('Modbus: failed to connect to serial port %s', self._inv.port)
             return False
 
         # by default read first 45 holding registers (from 0 to 44)
@@ -151,6 +175,8 @@ class Inverter(object):
             self.dtc = rr.registers[43]
             return True
 
+        logger.warning('Modbus: holding register read error (got %d registers, expected 45)',
+                       len(rr.registers) if hasattr(rr, 'registers') else 0)
         self.firmware = ''
         self.control_fw = ''
         self.model_no = ''
@@ -194,28 +220,26 @@ class PVOutputAPI(object):
                 r = requests.post(url, headers=headers, data=payload, timeout=10)
                 reset = round(float(r.headers['X-Rate-Limit-Reset']) - time())
                 if int(r.headers['X-Rate-Limit-Remaining']) < 10:
-                    print("Only {} requests left, reset after {} seconds".format(
-                        r.headers['X-Rate-Limit-Remaining'],
-                        reset))
+                    logger.warning("PVOutput: only %s requests left, reset after %s seconds",
+                                   r.headers['X-Rate-Limit-Remaining'], reset)
                 if r.status_code == 403:
-                    print("Forbidden: " + r.reason)
+                    logger.warning('PVOutput HTTP %d: %s', r.status_code, r.reason)
                     sleep(reset + 1)
                 else:
                     r.raise_for_status()
                     break
             except requests.exceptions.HTTPError as errh:
-                print(localnow().strftime('%Y-%m-%d %H:%M'), " Http Error:", errh)
+                logger.error('PVOutput HTTP %d: %s', r.status_code, errh)
             except requests.exceptions.ConnectionError as errc:
-                print(localnow().strftime('%Y-%m-%d %H:%M'), "Error Connecting:", errc)
+                logger.error('PVOutput connection error: %s', errc)
             except requests.exceptions.Timeout as errt:
-                print(localnow().strftime('%Y-%m-%d %H:%M'), "Timeout Error:", errt)
+                logger.error('PVOutput timeout: %s', errt)
             except requests.exceptions.RequestException as err:
-                print(localnow().strftime('%Y-%m-%d %H:%M'), "OOps: Something Else", err)
+                logger.error('PVOutput request error: %s', err)
 
             sleep(5)
         else:
-            print(localnow().strftime('%Y-%m-%d %H:%M'),
-                  "Failed to call PVOutput API after 3 attempts.")
+            logger.error('PVOutput API failed after 3 attempts')
 
     def send_status(self, date, energy_gen=None, power_gen=None, energy_imp=None,
                     power_imp=None, temp=None, vdc=None, cumulative=False, vac=None,
@@ -291,7 +315,7 @@ def main_loop():
                                     vac=inv.ac_volts, temp_inv=inv.temp,
                                     energy_life=inv.wh_total,
                                     power_vdc=inv.pv_power)
-                    print("PVOutput updated successfully.")
+                    logger.info('PVOutput updated successfully')
 
                 msgs = [
                     { 'topic': f"{MQTTTOPIC}/status", 'payload': str(inv.status) },
@@ -309,9 +333,9 @@ def main_loop():
                 try:
                     publish.multiple(msgs, hostname=MQTTBROKER, port=MQTTPORT,
                         auth={'username': MQTTUSER, 'password': MQTTPASS})
-                    print("Message published successfully.")
+                    logger.info('MQTT published successfully')
                 except Exception as e:
-                    print(f"Error publishing message: {e}")
+                    logger.error('MQTT publish failed: %s', e)
 
                 # sleep until next multiple of 1 minutes
                 sleep(60 - localnow().second)
@@ -331,9 +355,7 @@ def main_loop():
                 snooze = ((shStart - hour) * 60) - minute
             else:
                 snooze = 1  # fallback: recheck in 1 minute
-            print(localnow().strftime('%Y-%m-%d %H:%M') + ' - Next shift starts in ' + \
-                str(snooze) + ' minutes')
-            sys.stdout.flush()
+            logger.info('Next shift starts in %d minutes', snooze)
             snooze = snooze * 60  # seconds
             sleep(snooze)
 
