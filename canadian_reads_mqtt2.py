@@ -300,21 +300,25 @@ def main_loop():
     shStart = 5
     shStop = 21
 
+    POLL_INTERVAL = 10  # seconds between inverter reads / MQTT publishes
+    last_pvo_minute = -1  # guard against duplicate PVOutput uploads
+
     # Loop until end of universe
     while True:
-        # print(inv.status, inv.firmware, inv.control_fw, inv.model_no, inv.pv_power, inv.pv_volts, inv.ac_volts, inv.wh_today, inv.wh_total)
         if shStart <= localnow().hour < shStop:
             # get readings from inverter, if success send to pvoutput
             inv.read_inputs()
             if inv.status != -1:
 
-                # Upload to PVOutput on 5-minute clock boundaries
-                if localnow().minute % 5 == 0:
+                # Upload to PVOutput on 5-minute clock boundaries (once per slot)
+                now = localnow()
+                if now.minute % 5 == 0 and now.minute != last_pvo_minute:
                     pvo.send_status(date=inv.date, energy_gen=inv.wh_today,
                                     power_gen=inv.ac_power, vdc=inv.pv_volts,
                                     vac=inv.ac_volts, temp_inv=inv.temp,
                                     energy_life=inv.wh_total,
                                     power_vdc=inv.pv_power)
+                    last_pvo_minute = now.minute
                     logger.info('PVOutput updated successfully')
 
                 msgs = [
@@ -337,12 +341,11 @@ def main_loop():
                 except Exception as e:
                     logger.error('MQTT publish failed: %s', e)
 
-                # sleep until next multiple of 1 minutes
-                sleep(60 - localnow().second)
+                sleep(POLL_INTERVAL)
 
             else:
                 # some error
-                sleep(60)  # 1 minute before try again
+                sleep(POLL_INTERVAL)
         else:
             # it is too late or too early, let's sleep until next shift
             hour = localnow().hour
