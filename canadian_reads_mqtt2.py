@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import sys
+import argparse
 import logging
 import requests
 import paho.mqtt.publish as publish
@@ -11,9 +12,18 @@ from time import sleep, time
 from configobj import ConfigObj
 from pymodbus.client.sync import ModbusSerialClient as ModbusClient
 
+# ---------------------------------------------------------------------------
+# Command-line arguments
+# ---------------------------------------------------------------------------
+_parser = argparse.ArgumentParser(description='Canadian Solar inverter monitor')
+_parser.add_argument('--test', action='store_true',
+                     help='Test/dry-run mode: log MQTT and PVOutput data to terminal '
+                          'at DEBUG level instead of sending it')
+args = _parser.parse_args()
+
 # Set up logging (console + daily rotating file)
 logger = logging.getLogger('pvoutput')
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.DEBUG if args.test else logging.WARNING)
 _fmt = logging.Formatter('%(asctime)s %(levelname)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 _fh = TimedRotatingFileHandler('canadianSolar.log', when='midnight', backupCount=7)
 _fh.setFormatter(_fmt)
@@ -21,6 +31,10 @@ _ch = logging.StreamHandler(sys.stdout)
 _ch.setFormatter(_fmt)
 logger.addHandler(_fh)
 logger.addHandler(_ch)
+
+TEST_MODE = args.test
+if TEST_MODE:
+    logger.info('*** TEST MODE active – MQTT and PVOutput calls will be skipped ***')
 
 def load_config(path="pvoutput.txt"):
     """Read settings from config file. Exits with a clear message on error."""
@@ -46,7 +60,10 @@ def load_config(path="pvoutput.txt"):
 config = load_config()
 
 # Override log level from config (optional, default WARNING)
-if 'LOGLEVEL' in config:
+# --test flag forces DEBUG and takes precedence over config
+if TEST_MODE:
+    logger.setLevel(logging.DEBUG)
+elif 'LOGLEVEL' in config:
     _level = getattr(logging, config['LOGLEVEL'].upper(), None)
     if _level is not None:
         logger.setLevel(_level)
@@ -285,7 +302,10 @@ class PVOutputAPI(object):
             payload['v12'] = float(power_gen) / float(power_vdc)
 
         # Send status
-        self.add_status(payload, system_id)
+        if TEST_MODE:
+            logger.debug('PVOutput payload (not sent): %s', payload)
+        else:
+            self.add_status(payload, system_id)
 
 
 def main_loop():
@@ -334,12 +354,16 @@ def main_loop():
                     { 'topic': f"{MQTTTOPIC}/model_no", 'payload': inv.model_no }
                 ]
 
-                try:
-                    publish.multiple(msgs, hostname=MQTTBROKER, port=MQTTPORT,
-                        auth={'username': MQTTUSER, 'password': MQTTPASS})
-                    logger.info('MQTT published successfully')
-                except Exception as e:
-                    logger.error('MQTT publish failed: %s', e)
+                if TEST_MODE:
+                    for m in msgs:
+                        logger.debug('MQTT (not sent): %s = %s', m['topic'], m['payload'])
+                else:
+                    try:
+                        publish.multiple(msgs, hostname=MQTTBROKER, port=MQTTPORT,
+                            auth={'username': MQTTUSER, 'password': MQTTPASS})
+                        logger.info('MQTT published successfully')
+                    except Exception as e:
+                        logger.error('MQTT publish failed: %s', e)
 
                 sleep(POLL_INTERVAL)
 
