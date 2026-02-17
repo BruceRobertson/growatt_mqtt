@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 import sys
+import json
 import argparse
 import logging
 import requests
-import paho.mqtt.publish as publish
+import paho.mqtt.client as mqtt
 
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
@@ -82,6 +83,34 @@ MQTTPASS = config['MQTTPASS']
 MQTTBROKER = config['MQTTBROKER']
 MQTTPORT = config.as_int('MQTTPORT')
 MQTTTOPIC = config['MQTTTOPIC']
+
+# Home Assistant MQTT Discovery (optional, default enabled)
+HA_DISCOVERY = config.get('HA_DISCOVERY', 'true').lower() in ('true', '1', 'yes')
+HA_DISCOVERY_PREFIX = config.get('HA_DISCOVERY_PREFIX', 'homeassistant')
+
+# Sensor definitions for MQTT publishing and HA discovery
+# (object_id, name, unit, device_class, state_class, icon, entity_category)
+SENSORS = [
+    ("pv_power",    "PV Power",          "W",   "power",       "measurement",      "mdi:solar-power-variant", None),
+    ("pv_volts1",   "PV1 Voltage",       "V",   "voltage",     "measurement",      "mdi:solar-panel",         None),
+    ("pv_amps1",    "PV1 Current",       "A",   "current",     "measurement",      "mdi:current-dc",          None),
+    ("pv_power1",   "PV1 Power",         "W",   "power",       "measurement",      "mdi:solar-panel",         None),
+    ("pv_volts2",   "PV2 Voltage",       "V",   "voltage",     "measurement",      "mdi:solar-panel",         None),
+    ("pv_amps2",    "PV2 Current",       "A",   "current",     "measurement",      "mdi:current-dc",          None),
+    ("pv_power2",   "PV2 Power",         "W",   "power",       "measurement",      "mdi:solar-panel",         None),
+    ("ac_power",    "AC Power",          "W",   "power",       "measurement",      "mdi:home-lightning-bolt",  None),
+    ("ac_volts",    "AC Voltage",        "V",   "voltage",     "measurement",      "mdi:transmission-tower",   None),
+    ("ac_amps",     "AC Current",        "A",   "current",     "measurement",      "mdi:current-ac",          None),
+    ("ac_frequency","AC Frequency",      "Hz",  "frequency",   "measurement",      "mdi:sine-wave",           None),
+    ("wh_today",    "Energy Today",      "Wh",  "energy",      "total_increasing",  "mdi:white-balance-sunny", None),
+    ("wh_total",    "Energy Total",      "Wh",  "energy",      "total_increasing",  "mdi:lightning-bolt",      None),
+    ("temp",        "Temperature",       "\u00b0C",  "temperature", "measurement",      "mdi:thermometer",         None),
+    ("ipm_temp",    "IPM Temperature",   "\u00b0C",  "temperature", "measurement",      "mdi:thermometer-high",    None),
+    ("operation_hours", "Operation Hours","h",   "duration",    "total_increasing",  "mdi:clock-outline",       None),
+    ("status",      "Status",            None,  None,          None,               "mdi:solar-power",         "diagnostic"),
+    ("serial_no",   "Serial Number",     None,  None,          None,               "mdi:identifier",          "diagnostic"),
+    ("model_no",    "Model",             None,  None,          None,               "mdi:information-outline",  "diagnostic"),
+]
 
 # Local time with timezone
 def localnow():
@@ -341,6 +370,41 @@ class PVOutputAPI(object):
             self.add_status(payload, system_id)
 
 
+def publish_ha_discovery(client, inv):
+    """Publish HA MQTT Discovery configs for all sensors (retained)."""
+    device = {
+        "identifiers": [f"canadian_solar_{inv.serial_no}"],
+        "name": "Canadian Solar Inverter",
+        "manufacturer": "Canadian Solar",
+        "model": inv.model_no,
+        "sw_version": inv.firmware,
+    }
+
+    for obj_id, name, unit, dev_cls, state_cls, icon, ent_cat in SENSORS:
+        config = {
+            "name": name,
+            "state_topic": f"{MQTTTOPIC}/{obj_id}",
+            "unique_id": f"canadian_solar_{inv.serial_no}_{obj_id}",
+            "device": device,
+            "availability_topic": f"{MQTTTOPIC}/availability",
+            "icon": icon,
+        }
+        if unit:
+            config["unit_of_measurement"] = unit
+        if dev_cls:
+            config["device_class"] = dev_cls
+        if state_cls:
+            config["state_class"] = state_cls
+        if ent_cat:
+            config["entity_category"] = ent_cat
+
+        topic = f"{HA_DISCOVERY_PREFIX}/sensor/{inv.serial_no}/{obj_id}/config"
+        client.publish(topic, json.dumps(config), retain=True)
+
+    client.publish(f"{MQTTTOPIC}/availability", "online", retain=True)
+    logger.info('HA discovery configs published (%d sensors)', len(SENSORS))
+
+
 def main_loop():
     # init
     inv = Inverter(0x1, INVERTERPORT)
@@ -348,6 +412,35 @@ def main_loop():
     inv.version()
 
     pvo = PVOutputAPI(APIKEY, SYSTEMID)
+
+    # --- Persistent MQTT client ---
+    mqtt_client = None
+    if not TEST_MODE:
+        def on_connect(client, userdata, flags, rc):
+            if rc == 0:
+                logger.info('MQTT connected to %s:%d', MQTTBROKER, MQTTPORT)
+                if HA_DISCOVERY:
+                    publish_ha_discovery(client, inv)
+            else:
+                logger.error('MQTT connection failed (rc=%d)', rc)
+
+        def on_disconnect(client, userdata, rc):
+            if rc != 0:
+                logger.warning('MQTT unexpected disconnect (rc=%d), will auto-reconnect', rc)
+
+        mqtt_client = mqtt.Client()
+        mqtt_client.username_pw_set(MQTTUSER, MQTTPASS)
+        mqtt_client.will_set(f"{MQTTTOPIC}/availability", "offline", retain=True)
+        mqtt_client.on_connect = on_connect
+        mqtt_client.on_disconnect = on_disconnect
+        mqtt_client.connect(MQTTBROKER, MQTTPORT)
+        mqtt_client.loop_start()
+    else:
+        # Log what discovery would do in test mode
+        if HA_DISCOVERY:
+            for obj_id, name, unit, dev_cls, state_cls, icon, ent_cat in SENSORS:
+                topic = f"{HA_DISCOVERY_PREFIX}/sensor/{inv.serial_no}/{obj_id}/config"
+                logger.debug('HA discovery (not sent): %s -> %s', topic, name)
 
     # start and stop monitoring (hour of the day)
     shStart = 5
@@ -357,80 +450,84 @@ def main_loop():
     last_pvo_minute = -1  # guard against duplicate PVOutput uploads
 
     # Loop until end of universe
-    while True:
-        if shStart <= localnow().hour < shStop:
-            # get readings from inverter, if success send to pvoutput
-            inv.read_inputs()
-            if inv.status != -1:
+    try:
+        while True:
+            if shStart <= localnow().hour < shStop:
+                # get readings from inverter, if success send to pvoutput
+                inv.read_inputs()
+                if inv.status != -1:
 
-                # Upload to PVOutput on 5-minute clock boundaries (once per slot)
-                now = localnow()
-                if now.minute % 5 == 0 and now.minute != last_pvo_minute:
-                    pvo.send_status(date=inv.date, energy_gen=inv.wh_today,
-                                    power_gen=inv.ac_power, vdc=inv.pv_volts1,
-                                    vac=inv.ac_volts, temp_inv=inv.temp,
-                                    energy_life=inv.wh_total,
-                                    power_vdc=inv.pv_power_total)
-                    last_pvo_minute = now.minute
-                    logger.info('PVOutput updated successfully')
+                    # Upload to PVOutput on 5-minute clock boundaries (once per slot)
+                    now = localnow()
+                    if now.minute % 5 == 0 and now.minute != last_pvo_minute:
+                        pvo.send_status(date=inv.date, energy_gen=inv.wh_today,
+                                        power_gen=inv.ac_power, vdc=inv.pv_volts1,
+                                        vac=inv.ac_volts, temp_inv=inv.temp,
+                                        energy_life=inv.wh_total,
+                                        power_vdc=inv.pv_power_total)
+                        last_pvo_minute = now.minute
+                        logger.info('PVOutput updated successfully')
 
-                msgs = [
-                    { 'topic': f"{MQTTTOPIC}/status", 'payload': str(inv.status) },
-                    { 'topic': f"{MQTTTOPIC}/pv_power", 'payload': str(inv.pv_power_total) },
+                    # Build state messages from inverter readings
+                    state_values = {
+                        'status': str(inv.status),
+                        'pv_power': str(inv.pv_power_total),
+                        'pv_volts1': str(inv.pv_volts1),
+                        'pv_amps1': str(inv.pv_amps1),
+                        'pv_power1': str(inv.pv_power1),
+                        'pv_volts2': str(inv.pv_volts2),
+                        'pv_amps2': str(inv.pv_amps2),
+                        'pv_power2': str(inv.pv_power2),
+                        'ac_power': str(inv.ac_power),
+                        'ac_volts': str(inv.ac_volts),
+                        'ac_amps': str(inv.ac_amps),
+                        'ac_frequency': str(inv.ac_frequency),
+                        'wh_today': str(inv.wh_today),
+                        'wh_total': str(inv.wh_total),
+                        'temp': str(inv.temp),
+                        'ipm_temp': str(inv.ipm_temp),
+                        'operation_hours': str(inv.operation_hours),
+                        'serial_no': inv.serial_no,
+                        'model_no': inv.model_no,
+                    }
 
-                    { 'topic': f"{MQTTTOPIC}/ac_power", 'payload': str(inv.ac_power) },
-                    { 'topic': f"{MQTTTOPIC}/ac_volts", 'payload': str(inv.ac_volts) },
-                    { 'topic': f"{MQTTTOPIC}/ac_amps", 'payload': str(inv.ac_amps) },
-                    { 'topic': f"{MQTTTOPIC}/ac_frequency", 'payload': str(inv.ac_frequency) },
+                    if TEST_MODE:
+                        for key, val in state_values.items():
+                            logger.debug('MQTT (not sent): %s/%s = %s', MQTTTOPIC, key, val)
+                    else:
+                        try:
+                            for key, val in state_values.items():
+                                mqtt_client.publish(f"{MQTTTOPIC}/{key}", val)
+                            logger.info('MQTT published successfully')
+                        except Exception as e:
+                            logger.error('MQTT publish failed: %s', e)
 
-                    { 'topic': f"{MQTTTOPIC}/pv_volts1", 'payload': str(inv.pv_volts1) },
-                    { 'topic': f"{MQTTTOPIC}/pv_amps1", 'payload': str(inv.pv_amps1) },
-                    { 'topic': f"{MQTTTOPIC}/pv_power1", 'payload': str(inv.pv_power1) },
+                    sleep(POLL_INTERVAL)
 
-                    { 'topic': f"{MQTTTOPIC}/pv_volts2", 'payload': str(inv.pv_volts2) },
-                    { 'topic': f"{MQTTTOPIC}/pv_amps2", 'payload': str(inv.pv_amps2) },
-                    { 'topic': f"{MQTTTOPIC}/pv_power2", 'payload': str(inv.pv_power2) },
-
-                    { 'topic': f"{MQTTTOPIC}/wh_today", 'payload': str(inv.wh_today) },
-                    { 'topic': f"{MQTTTOPIC}/wh_total", 'payload': str(inv.wh_total) },
-                    { 'topic': f"{MQTTTOPIC}/temp", 'payload': str(inv.temp) },
-                    { 'topic': f"{MQTTTOPIC}/ipm_temp", 'payload': str(inv.ipm_temp) },
-                    { 'topic': f"{MQTTTOPIC}/serial_no", 'payload': inv.serial_no },
-                    { 'topic': f"{MQTTTOPIC}/model_no", 'payload': inv.model_no },
-                    { 'topic': f"{MQTTTOPIC}/operation_hours", 'payload': str(inv.operation_hours) }
-                ]
-
-                if TEST_MODE:
-                    for m in msgs:
-                        logger.debug('MQTT (not sent): %s = %s', m['topic'], m['payload'])
                 else:
-                    try:
-                        publish.multiple(msgs, hostname=MQTTBROKER, port=MQTTPORT,
-                            auth={'username': MQTTUSER, 'password': MQTTPASS})
-                        logger.info('MQTT published successfully')
-                    except Exception as e:
-                        logger.error('MQTT publish failed: %s', e)
-
-                sleep(POLL_INTERVAL)
-
+                    # some error
+                    sleep(POLL_INTERVAL)
             else:
-                # some error
-                sleep(POLL_INTERVAL)
-        else:
-            # it is too late or too early, let's sleep until next shift
-            hour = localnow().hour
-            minute = localnow().minute
-            if 24 > hour >= shStop:
-                # before midnight
-                snooze = (((shStart - hour) + 24) * 60) - minute
-            elif shStart > hour >= 0:
-                # after midnight
-                snooze = ((shStart - hour) * 60) - minute
-            else:
-                snooze = 1  # fallback: recheck in 1 minute
-            logger.info('Next shift starts in %d minutes', snooze)
-            snooze = snooze * 60  # seconds
-            sleep(snooze)
+                # it is too late or too early, let's sleep until next shift
+                hour = localnow().hour
+                minute = localnow().minute
+                if 24 > hour >= shStop:
+                    # before midnight
+                    snooze = (((shStart - hour) + 24) * 60) - minute
+                elif shStart > hour >= 0:
+                    # after midnight
+                    snooze = ((shStart - hour) * 60) - minute
+                else:
+                    snooze = 1  # fallback: recheck in 1 minute
+                logger.info('Next shift starts in %d minutes', snooze)
+                snooze = snooze * 60  # seconds
+                sleep(snooze)
+    finally:
+        if mqtt_client is not None:
+            mqtt_client.publish(f"{MQTTTOPIC}/availability", "offline", retain=True)
+            mqtt_client.disconnect()
+            mqtt_client.loop_stop()
+            logger.info('MQTT disconnected cleanly')
 
 
 if __name__ == '__main__':

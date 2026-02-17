@@ -38,6 +38,8 @@ Copy `pvoutput.txt.rename` to `pvoutput.txt` and fill in your details:
 | `MQTTPORT` | MQTT broker port (e.g. `1883`) |
 | `MQTTTOPIC` | MQTT base topic for published messages |
 | `LOGLEVEL` | *(Optional)* Log verbosity: `DEBUG`, `INFO`, `WARNING` (default), `ERROR`, `CRITICAL` |
+| `HA_DISCOVERY` | *(Optional)* Enable Home Assistant MQTT auto-discovery: `true` (default) or `false` |
+| `HA_DISCOVERY_PREFIX` | *(Optional)* HA discovery topic prefix (default `homeassistant`) |
 
 ## Logging
 
@@ -71,6 +73,14 @@ Reads the inverter but logs MQTT and PVOutput payloads at DEBUG level instead of
 | v9 (Extended) | `temp` (inverter temp) |
 | v10 (Extended) | `wh_total` (lifetime energy) |
 | v12 (Extended) | Efficiency % (`ac_power / pv_power * 100`) |
+
+## Home Assistant Discovery
+
+When `HA_DISCOVERY=true` (the default), the script publishes MQTT Discovery config payloads so Home Assistant automatically creates sensor entities grouped under a single **Canadian Solar Inverter** device. Discovery configs are published on every MQTT (re)connect, so HA picks them up after broker restarts too.
+
+An availability topic (`<MQTTTOPIC>/availability`) is used with a Last Will and Testament (LWT) so sensors show as **unavailable** in HA when the script is not running.
+
+To disable discovery, set `HA_DISCOVERY=false` in `pvoutput.txt`.
 
 ## MQTT Topics
 
