@@ -4,9 +4,11 @@ Reads data from a Canadian Solar or Growatt inverter via Modbus RTU (RS485) and 
 
 ## Features
 
-- Polls inverter input registers every 60 seconds for live power/energy data
-- Uploads status to PVOutput every 5 minutes
-- Publishes readings to an MQTT broker for integration with Home Assistant or similar
+- Polls inverter input registers every 10 seconds for near-real-time data
+- Uploads status to PVOutput every 5 minutes (aligned to clock boundaries)
+- Publishes per-string and AC readings to an MQTT broker for integration with Home Assistant or similar
+- Supports dual PV string monitoring (voltage, current, power per string)
+- `--test` dry-run mode logs all data without sending
 - Runs on a configurable schedule (default 05:00 - 21:00)
 
 ## Requirements
@@ -49,6 +51,27 @@ python canadian_reads_mqtt2.py
 
 The script runs continuously, polling the inverter during the configured hours and sleeping overnight. Press `Ctrl+C` to exit.
 
+### Dry-run / test mode
+
+```
+python canadian_reads_mqtt2.py --test
+```
+
+Reads the inverter but logs MQTT and PVOutput payloads at DEBUG level instead of sending them. Useful for verifying register mappings without affecting live systems.
+
+## PVOutput Fields
+
+| PVOutput field | Source |
+|----------------|--------|
+| v1 (Energy) | `wh_today` |
+| v2 (Power) | `ac_power` |
+| v5 (Temperature) | `temp` |
+| v6 (Voltage) | `ac_volts` |
+| v8 (Extended) | `pv_volts1` (DC voltage) |
+| v9 (Extended) | `temp` (inverter temp) |
+| v10 (Extended) | `wh_total` (lifetime energy) |
+| v12 (Extended) | Efficiency % (`ac_power / pv_power * 100`) |
+
 ## MQTT Topics
 
 All topics are published under the configured `MQTTTOPIC` prefix:
@@ -56,12 +79,21 @@ All topics are published under the configured `MQTTTOPIC` prefix:
 | Topic | Value |
 |-------|-------|
 | `<topic>/status` | Inverter status code |
-| `<topic>/pv_power` | DC power from panels (W) |
-| `<topic>/pv_volts` | DC voltage from panels (V) |
+| `<topic>/pv_power` | Total DC power from panels (W) |
+| `<topic>/pv_volts1` | PV string 1 voltage (V) |
+| `<topic>/pv_amps1` | PV string 1 current (A) |
+| `<topic>/pv_power1` | PV string 1 power (W) |
+| `<topic>/pv_volts2` | PV string 2 voltage (V) |
+| `<topic>/pv_amps2` | PV string 2 current (A) |
+| `<topic>/pv_power2` | PV string 2 power (W) |
 | `<topic>/ac_power` | AC output power (W) |
 | `<topic>/ac_volts` | AC output voltage (V) |
+| `<topic>/ac_amps` | AC output current (A) |
+| `<topic>/ac_frequency` | AC grid frequency (Hz) |
 | `<topic>/wh_today` | Energy generated today (Wh) |
 | `<topic>/wh_total` | Lifetime energy generated (Wh) |
-| `<topic>/temp` | Inverter temperature (C) |
+| `<topic>/temp` | Inverter temperature (°C) |
+| `<topic>/ipm_temp` | IPM module temperature (°C) |
+| `<topic>/operation_hours` | Total operation hours |
 | `<topic>/serial_no` | Inverter serial number |
 | `<topic>/model_no` | Inverter model info |

@@ -100,19 +100,28 @@ class Inverter(object):
         # Inverter properties
         self.date = timezone('UTC').localize(datetime(1970, 1, 1, 0, 0, 0))
         self.status = -1
-        self.pv_power = 0.0
-        self.pv_volts = 0.0
+        self.pv_power_total = 0.0
+        self.pv_power1 = 0.0
+        self.pv_volts1 = 0.0
+        self.pv_amps1 = 0.0
+        self.pv_power2 = 0.0
+        self.pv_volts2 = 0.0
+        self.pv_amps2 = 0.0
         self.ac_volts = 0.0
         self.ac_power = 0.0
+        self.ac_amps = 0.0
+        self.ac_frequency = 0.0
         self.wh_today = 0
         self.wh_total = 0
         self.temp = 0.0
+        self.ipm_temp = 0.0
         self.firmware = ''
         self.control_fw = ''
         self.model_no = ''
         self.serial_no = ''
         self.dtc = -1
         self.cmo_str = ''
+        self.operation_hours = 0.0
 
     def connect(self):
         """Connect to the inverter. Returns True if successful."""
@@ -138,13 +147,27 @@ class Inverter(object):
             if self.status != -1:
                 self.cmo_str = 'Status: '+str(self.status)
             # my setup will never use high nibble but I will code it anyway
-            self.pv_power = float((rr.registers[1] << 16)+rr.registers[2])/10
-            self.pv_volts = float(rr.registers[3])/10
-            self.ac_power = float((rr.registers[11] << 16)+rr.registers[12])/10
-            self.ac_volts = float(rr.registers[14])/10
-            self.wh_today = float((rr.registers[26] << 16)+rr.registers[27])*100
-            self.wh_total = float((rr.registers[28] << 16)+rr.registers[29])*100
-            self.temp = float(rr.registers[32])/10
+            self.pv_power_total = self._rsdf(rr.registers, 1)
+
+            self.pv_volts1 = self._rssf(rr.registers, 3)
+            self.pv_amps1 = self._rssf(rr.registers, 4)
+            self.pv_power1 = self._rsdf(rr.registers, 5)
+
+            self.pv_volts2 = self._rssf(rr.registers, 7)
+            self.pv_amps2 = self._rssf(rr.registers, 8)
+            self.pv_power2 = self._rsdf(rr.registers, 9)
+
+            self.ac_power = self._rsdf(rr.registers, 11)
+            self.ac_volts = self._rssf(rr.registers, 14)
+            self.ac_amps = self._rssf(rr.registers, 15)
+            self.ac_frequency = self._rssf(rr.registers, 13, 100)
+
+            self.wh_today = self._rsdf(rr.registers, 26, 0.01)
+            self.wh_total = self._rsdf(rr.registers, 28, 0.01)
+            self.operation_hours = self._rsdf(rr.registers, 30, 7200)
+            self.temp = self._rssf(rr.registers, 32)
+            self.ipm_temp = self._rssf(rr.registers, 41)
+
             return True
 
         logger.warning('Modbus: input register read error (got %d registers, expected 45)',
@@ -160,6 +183,16 @@ class Inverter(object):
             chr(registers[i] >> 8) + chr(registers[i] & 0xFF)
             for i in range(start, start + count)
         )
+
+    @staticmethod
+    def _rssf(registers, index, scale=10):
+        """Read and scale single to float."""
+        return float(registers[index]) / scale
+
+    @staticmethod
+    def _rsdf(registers, index, scale=10):
+        """Read and scale double to float."""
+        return float((registers[index] << 16) + registers[index + 1]) / scale
 
     def version(self):
         """Read firmware version"""
@@ -284,22 +317,22 @@ class PVOutputAPI(object):
         if temp is not None:
             payload['v5'] = float(temp)
         if vdc is not None:
-            payload['v6'] = float(vdc)
+            payload['v8'] = float(vdc)
         if cumulative is True:
             payload['c1'] = 1
         else:
             payload['c1'] = 0
-#        if vac is not None:
-#            payload['v8'] = float(vac)
-#        if temp_inv is not None:
-#            payload['v9'] = float(temp_inv)
+        if vac is not None:
+            payload['v6'] = float(vac)
+        if temp_inv is not None:
+            payload['v9'] = float(temp_inv)
         if energy_life is not None:
             payload['v10'] = int(energy_life)
         if comments is not None:
             payload['m1'] = str(comments)[:30]
         # calculate efficiency
         if ((power_vdc is not None) and (power_vdc > 0) and (power_gen is not None)):
-            payload['v12'] = float(power_gen) / float(power_vdc)
+            payload['v12'] = float(power_gen) / float(power_vdc) * 100
 
         # Send status
         if TEST_MODE:
@@ -334,24 +367,37 @@ def main_loop():
                 now = localnow()
                 if now.minute % 5 == 0 and now.minute != last_pvo_minute:
                     pvo.send_status(date=inv.date, energy_gen=inv.wh_today,
-                                    power_gen=inv.ac_power, vdc=inv.pv_volts,
+                                    power_gen=inv.ac_power, vdc=inv.pv_volts1,
                                     vac=inv.ac_volts, temp_inv=inv.temp,
                                     energy_life=inv.wh_total,
-                                    power_vdc=inv.pv_power)
+                                    power_vdc=inv.pv_power_total)
                     last_pvo_minute = now.minute
                     logger.info('PVOutput updated successfully')
 
                 msgs = [
                     { 'topic': f"{MQTTTOPIC}/status", 'payload': str(inv.status) },
-                    { 'topic': f"{MQTTTOPIC}/pv_power", 'payload': str(inv.pv_power) },
-                    { 'topic': f"{MQTTTOPIC}/pv_volts", 'payload': str(inv.pv_volts) },
+                    { 'topic': f"{MQTTTOPIC}/pv_power", 'payload': str(inv.pv_power_total) },
+
                     { 'topic': f"{MQTTTOPIC}/ac_power", 'payload': str(inv.ac_power) },
                     { 'topic': f"{MQTTTOPIC}/ac_volts", 'payload': str(inv.ac_volts) },
+                    { 'topic': f"{MQTTTOPIC}/ac_amps", 'payload': str(inv.ac_amps) },
+                    { 'topic': f"{MQTTTOPIC}/ac_frequency", 'payload': str(inv.ac_frequency) },
+
+                    { 'topic': f"{MQTTTOPIC}/pv_volts1", 'payload': str(inv.pv_volts1) },
+                    { 'topic': f"{MQTTTOPIC}/pv_amps1", 'payload': str(inv.pv_amps1) },
+                    { 'topic': f"{MQTTTOPIC}/pv_power1", 'payload': str(inv.pv_power1) },
+
+                    { 'topic': f"{MQTTTOPIC}/pv_volts2", 'payload': str(inv.pv_volts2) },
+                    { 'topic': f"{MQTTTOPIC}/pv_amps2", 'payload': str(inv.pv_amps2) },
+                    { 'topic': f"{MQTTTOPIC}/pv_power2", 'payload': str(inv.pv_power2) },
+
                     { 'topic': f"{MQTTTOPIC}/wh_today", 'payload': str(inv.wh_today) },
                     { 'topic': f"{MQTTTOPIC}/wh_total", 'payload': str(inv.wh_total) },
                     { 'topic': f"{MQTTTOPIC}/temp", 'payload': str(inv.temp) },
+                    { 'topic': f"{MQTTTOPIC}/ipm_temp", 'payload': str(inv.ipm_temp) },
                     { 'topic': f"{MQTTTOPIC}/serial_no", 'payload': inv.serial_no },
-                    { 'topic': f"{MQTTTOPIC}/model_no", 'payload': inv.model_no }
+                    { 'topic': f"{MQTTTOPIC}/model_no", 'payload': inv.model_no },
+                    { 'topic': f"{MQTTTOPIC}/operation_hours", 'payload': str(inv.operation_hours) }
                 ]
 
                 if TEST_MODE:
