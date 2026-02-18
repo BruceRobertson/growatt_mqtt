@@ -48,7 +48,7 @@ Logs are written to both the console and `canadianSolar.log` (daily rotation, 7 
 ## Usage
 
 ```
-python canadian_reads_mqtt2.py
+python src/canadian_reads_mqtt2.py
 ```
 
 The script runs continuously, polling the inverter during the configured hours and sleeping overnight. Press `Ctrl+C` to exit.
@@ -56,7 +56,7 @@ The script runs continuously, polling the inverter during the configured hours a
 ### Dry-run / test mode
 
 ```
-python canadian_reads_mqtt2.py --test
+python src/canadian_reads_mqtt2.py --test
 ```
 
 Reads the inverter but logs MQTT and PVOutput payloads at DEBUG level instead of sending them. Useful for verifying register mappings without affecting live systems.

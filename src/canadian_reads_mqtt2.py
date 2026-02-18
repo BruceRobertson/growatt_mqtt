@@ -5,6 +5,8 @@ import argparse
 import logging
 import requests
 import paho.mqtt.client as mqtt
+from pathlib import Path
+from paho.mqtt.client import CallbackAPIVersion
 
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
@@ -13,10 +15,19 @@ from time import sleep, time
 from configobj import ConfigObj
 from pymodbus.client.sync import ModbusSerialClient as ModbusClient
 
+from const import (
+    FAULTCODES,
+    STATUSCODES,
+    WARNINGCODES,
+)
+
+# Repo root is the parent of this file's directory (src/)
+_ROOT = Path(__file__).resolve().parent.parent
+
 # ---------------------------------------------------------------------------
 # Command-line arguments
 # ---------------------------------------------------------------------------
-_parser = argparse.ArgumentParser(description='Canadian Solar inverter monitor')
+_parser = argparse.ArgumentParser(description='Growatt inverter monitor')
 _parser.add_argument('--test', action='store_true',
                      help='Test/dry-run mode: log MQTT and PVOutput data to terminal '
                           'at DEBUG level instead of sending it')
@@ -26,7 +37,7 @@ args = _parser.parse_args()
 logger = logging.getLogger('pvoutput')
 logger.setLevel(logging.DEBUG if args.test else logging.WARNING)
 _fmt = logging.Formatter('%(asctime)s %(levelname)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-_fh = TimedRotatingFileHandler('canadianSolar.log', when='midnight', backupCount=7)
+_fh = TimedRotatingFileHandler(_ROOT / 'growatt.log', when='midnight', backupCount=7)
 _fh.setFormatter(_fmt)
 _ch = logging.StreamHandler(sys.stdout)
 _ch.setFormatter(_fmt)
@@ -37,7 +48,7 @@ TEST_MODE = args.test
 if TEST_MODE:
     logger.info('*** TEST MODE active – MQTT and PVOutput calls will be skipped ***')
 
-def load_config(path="pvoutput.txt"):
+def load_config(path=_ROOT / "pvoutput.txt"):
     """Read settings from config file. Exits with a clear message on error."""
     required_keys = [
         'SYSTEMID', 'APIKEY', 'TimeZone', 'INVERTERPORT',
@@ -107,7 +118,7 @@ SENSORS = [
     ("temp",        "Temperature",       "\u00b0C",  "temperature", "measurement",      "mdi:thermometer",         None),
     ("ipm_temp",    "IPM Temperature",   "\u00b0C",  "temperature", "measurement",      "mdi:thermometer-high",    None),
     ("operation_hours", "Operation Hours","h",   "duration",    "total_increasing",  "mdi:clock-outline",       None),
-    ("status",      "Status",            None,  None,          None,               "mdi:solar-power",         "diagnostic"),
+    ("status_str",      "Status",            None,  None,          None,               "mdi:solar-power",         "diagnostic"),
     ("serial_no",   "Serial Number",     None,  None,          None,               "mdi:identifier",          "diagnostic"),
     ("model_no",    "Model",             None,  None,          None,               "mdi:information-outline",  "diagnostic"),
 ]
@@ -149,7 +160,7 @@ class Inverter(object):
         self.model_no = ''
         self.serial_no = ''
         self.dtc = -1
-        self.cmo_str = ''
+        self.status_str = ''
         self.operation_hours = 0.0
 
     def connect(self):
@@ -174,7 +185,7 @@ class Inverter(object):
 
             self.status = rr.registers[0]
             if self.status != -1:
-                self.cmo_str = 'Status: '+str(self.status)
+                self.status_str = STATUSCODES[self.status]                        
             # my setup will never use high nibble but I will code it anyway
             self.pv_power_total = self._rsdf(rr.registers, 1)
 
@@ -373,9 +384,9 @@ class PVOutputAPI(object):
 def publish_ha_discovery(client, inv):
     """Publish HA MQTT Discovery configs for all sensors (retained)."""
     device = {
-        "identifiers": [f"canadian_solar_{inv.serial_no}"],
-        "name": "Canadian Solar Inverter",
-        "manufacturer": "Canadian Solar",
+        "identifiers": [f"growatt_{inv.serial_no}"],
+        "name": "Growatt Solar Inverter",
+        "manufacturer": "Growatt",
         "model": inv.model_no,
         "sw_version": inv.firmware,
     }
@@ -384,7 +395,7 @@ def publish_ha_discovery(client, inv):
         config = {
             "name": name,
             "state_topic": f"{MQTTTOPIC}/{obj_id}",
-            "unique_id": f"canadian_solar_{inv.serial_no}_{obj_id}",
+            "unique_id": f"growatt_{inv.serial_no}_{obj_id}",
             "device": device,
             "availability_topic": f"{MQTTTOPIC}/availability",
             "icon": icon,
@@ -416,19 +427,19 @@ def main_loop():
     # --- Persistent MQTT client ---
     mqtt_client = None
     if not TEST_MODE:
-        def on_connect(client, userdata, flags, rc):
-            if rc == 0:
+        def on_connect(client, userdata, flags, reason_code, properties):
+            if reason_code == 0:
                 logger.info('MQTT connected to %s:%d', MQTTBROKER, MQTTPORT)
                 if HA_DISCOVERY:
                     publish_ha_discovery(client, inv)
             else:
-                logger.error('MQTT connection failed (rc=%d)', rc)
+                logger.error('MQTT connection failed (rc=%s)', reason_code)
 
-        def on_disconnect(client, userdata, rc):
-            if rc != 0:
-                logger.warning('MQTT unexpected disconnect (rc=%d), will auto-reconnect', rc)
+        def on_disconnect(client, userdata, flags, reason_code, properties):
+            if reason_code != 0:
+                logger.warning('MQTT unexpected disconnect (rc=%s), will auto-reconnect', reason_code)
 
-        mqtt_client = mqtt.Client()
+        mqtt_client = mqtt.Client(CallbackAPIVersion.VERSION2)
         mqtt_client.username_pw_set(MQTTUSER, MQTTPASS)
         mqtt_client.will_set(f"{MQTTTOPIC}/availability", "offline", retain=True)
         mqtt_client.on_connect = on_connect
@@ -470,7 +481,7 @@ def main_loop():
 
                     # Build state messages from inverter readings
                     state_values = {
-                        'status': str(inv.status),
+                        'status': inv.status_str,
                         'pv_power': str(inv.pv_power_total),
                         'pv_volts1': str(inv.pv_volts1),
                         'pv_amps1': str(inv.pv_amps1),
