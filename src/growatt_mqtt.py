@@ -48,7 +48,7 @@ TEST_MODE = args.test
 if TEST_MODE:
     logger.info('*** TEST MODE active – MQTT and PVOutput calls will be skipped ***')
 
-def load_config(path=_ROOT / "pvoutput.txt"):
+def load_config(path=str(_ROOT / "pvoutput.txt")):
     """Read settings from config file. Exits with a clear message on error."""
     required_keys = [
         'SYSTEMID', 'APIKEY', 'TimeZone', 'INVERTERPORT',
