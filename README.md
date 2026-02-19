@@ -2,9 +2,11 @@
 
 Reads data from a Canadian Solar or Growatt inverter via Modbus RTU (RS485) and uploads it to [PVOutput](https://pvoutput.org) and an MQTT broker.
 
+Adapted from https://github.com/ArdescoConsulting/growattRS232 and https://github.com/jrbenito/canadianSolar-pvoutput
+
 ## Features
 
-- Polls inverter input registers every 10 seconds for near-real-time data
+- Polls inverter input registers every 20 seconds for near-real-time data
 - Uploads status to PVOutput every 5 minutes (aligned to clock boundaries)
 - Publishes per-string and AC readings to an MQTT broker for integration with Home Assistant or similar
 - Supports dual PV string monitoring (voltage, current, power per string)
@@ -38,15 +40,17 @@ Copy `pvoutput.txt.rename` to `pvoutput.txt` and fill in your details:
 | `MQTTPORT` | MQTT broker port (e.g. `1883`) |
 | `MQTTTOPIC` | MQTT base topic for published messages |
 | `LOGLEVEL` | *(Optional)* Log verbosity: `DEBUG`, `INFO`, `WARNING` (default), `ERROR`, `CRITICAL` |
+| `HA_DISCOVERY` | *(Optional)* Enable Home Assistant MQTT auto-discovery: `true` (default) or `false` |
+| `HA_DISCOVERY_PREFIX` | *(Optional)* HA discovery topic prefix (default `homeassistant`) |
 
 ## Logging
 
-Logs are written to both the console and `canadianSolar.log` (daily rotation, 7 days retained). The default level is `WARNING`, which logs errors and warnings only. Set `LOGLEVEL=INFO` in `pvoutput.txt` to also see successful upload confirmations and scheduling messages.
+Logs are written to both the console and `growatt.log` (daily rotation, 7 days retained). The default level is `WARNING`, which logs errors and warnings only. Set `LOGLEVEL=INFO` in `pvoutput.txt` to also see successful upload confirmations and scheduling messages.
 
 ## Usage
 
 ```
-python canadian_reads_mqtt2.py
+python src/growatt_mqtt.py
 ```
 
 The script runs continuously, polling the inverter during the configured hours and sleeping overnight. Press `Ctrl+C` to exit.
@@ -54,7 +58,7 @@ The script runs continuously, polling the inverter during the configured hours a
 ### Dry-run / test mode
 
 ```
-python canadian_reads_mqtt2.py --test
+python src/growatt_mqtt.py --test
 ```
 
 Reads the inverter but logs MQTT and PVOutput payloads at DEBUG level instead of sending them. Useful for verifying register mappings without affecting live systems.
@@ -72,6 +76,14 @@ Reads the inverter but logs MQTT and PVOutput payloads at DEBUG level instead of
 | v10 (Extended) | `wh_total` (lifetime energy) |
 | v12 (Extended) | Efficiency % (`ac_power / pv_power * 100`) |
 
+## Home Assistant Discovery
+
+When `HA_DISCOVERY=true` (the default), the script publishes MQTT Discovery config payloads so Home Assistant automatically creates sensor entities grouped under a single **Growatt Solar Inverter** device. Discovery configs are published on every MQTT (re)connect, so HA picks them up after broker restarts too.
+
+An availability topic (`<MQTTTOPIC>/availability`) is used with a Last Will and Testament (LWT) so sensors show as **unavailable** in HA when the script is not running.
+
+To disable discovery, set `HA_DISCOVERY=false` in `pvoutput.txt`.
+
 ## MQTT Topics
 
 All topics are published under the configured `MQTTTOPIC` prefix:
@@ -79,6 +91,7 @@ All topics are published under the configured `MQTTTOPIC` prefix:
 | Topic | Value |
 |-------|-------|
 | `<topic>/status` | Inverter status code |
+| `<topic>/status_str` | Inverter status string |
 | `<topic>/pv_power` | Total DC power from panels (W) |
 | `<topic>/pv_volts1` | PV string 1 voltage (V) |
 | `<topic>/pv_amps1` | PV string 1 current (A) |
