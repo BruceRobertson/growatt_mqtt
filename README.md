@@ -2,9 +2,11 @@
 
 Reads data from a Canadian Solar or Growatt inverter via Modbus RTU (RS485) and uploads it to [PVOutput](https://pvoutput.org) and an MQTT broker.
 
+Adapted from https://github.com/ArdescoConsulting/growattRS232 and https://github.com/jrbenito/canadianSolar-pvoutput
+
 ## Features
 
-- Polls inverter input registers every 10 seconds for near-real-time data
+- Polls inverter input registers every 20 seconds for near-real-time data
 - Uploads status to PVOutput every 5 minutes (aligned to clock boundaries)
 - Publishes per-string and AC readings to an MQTT broker for integration with Home Assistant or similar
 - Supports dual PV string monitoring (voltage, current, power per string)

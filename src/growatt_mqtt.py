@@ -458,7 +458,7 @@ def main_loop():
     shStart = 5
     shStop = 21
 
-    POLL_INTERVAL = 10  # seconds between inverter reads / MQTT publishes
+    POLL_INTERVAL = 20  # seconds between inverter reads / MQTT publishes
     last_pvo_minute = -1  # guard against duplicate PVOutput uploads
 
     # Loop until end of universe
