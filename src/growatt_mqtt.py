@@ -118,7 +118,8 @@ SENSORS = [
     ("temp",        "Temperature",       "\u00b0C",  "temperature", "measurement",      "mdi:thermometer",         None),
     ("ipm_temp",    "IPM Temperature",   "\u00b0C",  "temperature", "measurement",      "mdi:thermometer-high",    None),
     ("operation_hours", "Operation Hours","h",   "duration",    "total_increasing",  "mdi:clock-outline",       None),
-    ("status_str",      "Status",            None,  None,          None,               "mdi:solar-power",         "diagnostic"),
+    ("status",      "Status Code",            None,  None,          None,               "mdi:solar-power",         "diagnostic"),
+    ("status_str",  "Status",            None,  None,          None,               "mdi:solar-power",         "diagnostic"),
     ("serial_no",   "Serial Number",     None,  None,          None,               "mdi:identifier",          "diagnostic"),
     ("model_no",    "Model",             None,  None,          None,               "mdi:information-outline",  "diagnostic"),
 ]
@@ -139,7 +140,6 @@ class Inverter(object):
 
         # Inverter properties
         self.date = timezone('UTC').localize(datetime(1970, 1, 1, 0, 0, 0))
-        self.status = -1
         self.pv_power_total = 0.0
         self.pv_power1 = 0.0
         self.pv_volts1 = 0.0
@@ -160,6 +160,7 @@ class Inverter(object):
         self.model_no = ''
         self.serial_no = ''
         self.dtc = -1
+        self.status = -1
         self.status_str = ''
         self.operation_hours = 0.0
 
@@ -185,7 +186,7 @@ class Inverter(object):
 
             self.status = rr.registers[0]
             if self.status != -1:
-                self.status_str = STATUSCODES[self.status]                        
+                self.status_str = STATUSCODES[self.status]
             # my setup will never use high nibble but I will code it anyway
             self.pv_power_total = self._rsdf(rr.registers, 1)
 
@@ -481,7 +482,8 @@ def main_loop():
 
                     # Build state messages from inverter readings
                     state_values = {
-                        'status': inv.status_str,
+                        'status': str(inv.status),
+                        'status_str': inv.status_str,
                         'pv_power': str(inv.pv_power_total),
                         'pv_volts1': str(inv.pv_volts1),
                         'pv_amps1': str(inv.pv_amps1),

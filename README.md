@@ -43,12 +43,12 @@ Copy `pvoutput.txt.rename` to `pvoutput.txt` and fill in your details:
 
 ## Logging
 
-Logs are written to both the console and `canadianSolar.log` (daily rotation, 7 days retained). The default level is `WARNING`, which logs errors and warnings only. Set `LOGLEVEL=INFO` in `pvoutput.txt` to also see successful upload confirmations and scheduling messages.
+Logs are written to both the console and `growatt.log` (daily rotation, 7 days retained). The default level is `WARNING`, which logs errors and warnings only. Set `LOGLEVEL=INFO` in `pvoutput.txt` to also see successful upload confirmations and scheduling messages.
 
 ## Usage
 
 ```
-python src/canadian_reads_mqtt2.py
+python src/growatt_mqtt.py
 ```
 
 The script runs continuously, polling the inverter during the configured hours and sleeping overnight. Press `Ctrl+C` to exit.
@@ -56,7 +56,7 @@ The script runs continuously, polling the inverter during the configured hours a
 ### Dry-run / test mode
 
 ```
-python src/canadian_reads_mqtt2.py --test
+python src/growatt_mqtt.py --test
 ```
 
 Reads the inverter but logs MQTT and PVOutput payloads at DEBUG level instead of sending them. Useful for verifying register mappings without affecting live systems.
@@ -76,7 +76,7 @@ Reads the inverter but logs MQTT and PVOutput payloads at DEBUG level instead of
 
 ## Home Assistant Discovery
 
-When `HA_DISCOVERY=true` (the default), the script publishes MQTT Discovery config payloads so Home Assistant automatically creates sensor entities grouped under a single **Canadian Solar Inverter** device. Discovery configs are published on every MQTT (re)connect, so HA picks them up after broker restarts too.
+When `HA_DISCOVERY=true` (the default), the script publishes MQTT Discovery config payloads so Home Assistant automatically creates sensor entities grouped under a single **Growatt Solar Inverter** device. Discovery configs are published on every MQTT (re)connect, so HA picks them up after broker restarts too.
 
 An availability topic (`<MQTTTOPIC>/availability`) is used with a Last Will and Testament (LWT) so sensors show as **unavailable** in HA when the script is not running.
 
@@ -89,6 +89,7 @@ All topics are published under the configured `MQTTTOPIC` prefix:
 | Topic | Value |
 |-------|-------|
 | `<topic>/status` | Inverter status code |
+| `<topic>/status_str` | Inverter status string |
 | `<topic>/pv_power` | Total DC power from panels (W) |
 | `<topic>/pv_volts1` | PV string 1 voltage (V) |
 | `<topic>/pv_amps1` | PV string 1 current (A) |
