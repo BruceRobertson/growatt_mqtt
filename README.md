@@ -2,7 +2,7 @@
 
 Reads data from a Canadian Solar or Growatt inverter via Modbus RTU (RS485) and uploads it to [PVOutput](https://pvoutput.org) and an MQTT broker.
 
-Adapted from https://github.com/ArdescoConsulting/growattRS232 and https://github.com/jrbenito/canadianSolar-pvoutput
+Adapted from [canadianSolar-pvoutput](https://github.com/jrbenito/canadianSolar-pvoutput) and [growattRS232](https://github.com/ArdescoConsulting/growattRS232). See [this thread](https://forum.pvoutput.org/t/help-required-uploading-growatt-inverter-to-pvoutput/) ov PVOutput community forums.
 
 ## Features
 
@@ -40,7 +40,9 @@ Copy `pvoutput.txt.rename` to `pvoutput.txt` and fill in your details:
 | `MQTTPORT` | MQTT broker port (e.g. `1883`) |
 | `MQTTTOPIC` | MQTT base topic for published messages |
 | `LOGLEVEL` | *(Optional)* Log verbosity: `DEBUG`, `INFO`, `WARNING` (default), `ERROR`, `CRITICAL` |
-| `HA_DISCOVERY` | *(Optional)* Enable Home Assistant MQTT auto-discovery: `true` (default) or `false` |
+| `MQTT_ENABLE` | *(Optional)* Publish readings to MQTT broker: `true` (default) or `false` |
+| `PVOUTPUT_ENABLE` | *(Optional)* Upload readings to PVOutput: `true` (default) or `false` |
+| `HA_DISCOVERY` | *(Optional)* Enable Home Assistant MQTT auto-discovery: `true` (default) or `false`. Ignored if `MQTT_ENABLE=false` |
 | `HA_DISCOVERY_PREFIX` | *(Optional)* HA discovery topic prefix (default `homeassistant`) |
 
 ## Logging

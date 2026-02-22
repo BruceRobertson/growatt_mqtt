@@ -95,9 +95,16 @@ MQTTBROKER = config['MQTTBROKER']
 MQTTPORT = config.as_int('MQTTPORT')
 MQTTTOPIC = config['MQTTTOPIC']
 
-# Home Assistant MQTT Discovery (optional, default enabled)
-HA_DISCOVERY = config.get('HA_DISCOVERY', 'true').lower() in ('true', '1', 'yes')
+# Output enable flags (optional, default enabled)
+MQTT_ENABLE = config.get('MQTT_ENABLE', 'true').lower() in ('true', '1', 'yes')
+PVOUTPUT_ENABLE = config.get('PVOUTPUT_ENABLE', 'true').lower() in ('true', '1', 'yes')
+
+# Home Assistant MQTT Discovery (optional, default enabled; requires MQTT_ENABLE)
+HA_DISCOVERY = MQTT_ENABLE and config.get('HA_DISCOVERY', 'true').lower() in ('true', '1', 'yes')
 HA_DISCOVERY_PREFIX = config.get('HA_DISCOVERY_PREFIX', 'homeassistant')
+
+if not MQTT_ENABLE and config.get('HA_DISCOVERY', 'true').lower() in ('true', '1', 'yes'):
+    logger.warning('HA_DISCOVERY ignored: MQTT_ENABLE is false')
 
 # Sensor definitions for MQTT publishing and HA discovery
 # (object_id, name, unit, device_class, state_class, icon, entity_category)
@@ -211,8 +218,6 @@ class Inverter(object):
 
             return True
 
-        logger.warning('Modbus: input register read error (got %d registers, expected 45)',
-                       len(rr.registers) if hasattr(rr, 'registers') else 0)
         self.status = -1
         self._inv.close()  # close on error to reset serial state
         return False
@@ -427,7 +432,7 @@ def main_loop():
 
     # --- Persistent MQTT client ---
     mqtt_client = None
-    if not TEST_MODE:
+    if MQTT_ENABLE and not TEST_MODE:
         def on_connect(client, userdata, flags, reason_code, properties):
             if reason_code == 0:
                 logger.info('MQTT connected to %s:%d', MQTTBROKER, MQTTPORT)
@@ -447,7 +452,7 @@ def main_loop():
         mqtt_client.on_disconnect = on_disconnect
         mqtt_client.connect(MQTTBROKER, MQTTPORT)
         mqtt_client.loop_start()
-    else:
+    elif MQTT_ENABLE and TEST_MODE:
         # Log what discovery would do in test mode
         if HA_DISCOVERY:
             for obj_id, name, unit, dev_cls, state_cls, icon, ent_cat in SENSORS:
@@ -471,7 +476,7 @@ def main_loop():
 
                     # Upload to PVOutput on 5-minute clock boundaries (once per slot)
                     now = localnow()
-                    if now.minute % 5 == 0 and now.minute != last_pvo_minute:
+                    if PVOUTPUT_ENABLE and now.minute % 5 == 0 and now.minute != last_pvo_minute:
                         pvo.send_status(date=inv.date, energy_gen=inv.wh_today,
                                         power_gen=inv.ac_power, vdc=inv.pv_volts1,
                                         vac=inv.ac_volts, temp_inv=inv.temp,
@@ -504,10 +509,10 @@ def main_loop():
                         'model_no': inv.model_no,
                     }
 
-                    if TEST_MODE:
+                    if MQTT_ENABLE and TEST_MODE:
                         for key, val in state_values.items():
                             logger.debug('MQTT (not sent): %s/%s = %s', MQTTTOPIC, key, val)
-                    else:
+                    elif MQTT_ENABLE:
                         try:
                             for key, val in state_values.items():
                                 mqtt_client.publish(f"{MQTTTOPIC}/{key}", val)
