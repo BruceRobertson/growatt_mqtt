@@ -1,8 +1,8 @@
 # Canadian Solar / Growatt Inverter Monitor
 
-Reads data from a Canadian Solar or Growatt inverter via Modbus RTU (RS485) and uploads it to [PVOutput](https://pvoutput.org) and an MQTT broker.
+Reads data from a Canadian Solar or Growatt inverter via Modbus RTU (RS485) and uploads it to [PVOutput](https://pvoutput.org) and an MQTT broker. When publishing to MQTT it optionally supports the extra fields necessary for Home Assistant auto discovery.
 
-Adapted from [canadianSolar-pvoutput](https://github.com/jrbenito/canadianSolar-pvoutput) and [growattRS232](https://github.com/ArdescoConsulting/growattRS232). See [this thread](https://forum.pvoutput.org/t/help-required-uploading-growatt-inverter-to-pvoutput/) ov PVOutput community forums.
+Originally adapted from [canadianSolar-pvoutput](https://github.com/jrbenito/canadianSolar-pvoutput) with some of the status codes and extra field decoding added from [growattRS232](https://github.com/ArdescoConsulting/growattRS232). See [this thread](https://forum.pvoutput.org/t/help-required-uploading-growatt-inverter-to-pvoutput/) ov PVOutput community forums.
 
 ## Features
 
