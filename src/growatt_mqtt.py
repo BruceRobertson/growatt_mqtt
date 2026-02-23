@@ -354,26 +354,20 @@ class PVOutputAPI(object):
             self._wh_today_last = int(energy_gen)
             payload['v1'] = int(energy_gen)
 
-        if power_gen is not None:
-            payload['v2'] = float(power_gen)
-        if energy_imp is not None:
-            payload['v3'] = int(energy_imp)
-        if power_imp is not None:
-            payload['v4'] = float(power_imp)
-        if temp is not None:
-            payload['v5'] = float(temp)
-        if vdc is not None:
-            payload['v8'] = float(vdc)
-        if cumulative is True:
-            payload['c1'] = 1
-        else:
-            payload['c1'] = 0
-        if vac is not None:
-            payload['v6'] = float(vac)
-        if temp_inv is not None:
-            payload['v9'] = float(temp_inv)
-        if energy_life is not None:
-            payload['v10'] = int(energy_life)
+        for key, val, cast in [
+            ('v2',  power_gen,   float),
+            ('v3',  energy_imp,  int),
+            ('v4',  power_imp,   float),
+            ('v5',  temp,        float),
+            ('v6',  vac,         float),
+            ('v8',  vdc,         float),
+            ('v9',  temp_inv,    float),
+            ('v10', energy_life, int),
+        ]:
+            if val is not None:
+                payload[key] = cast(val)
+
+        payload['c1'] = 1 if cumulative else 0
         if comments is not None:
             payload['m1'] = str(comments)[:30]
         # calculate efficiency
